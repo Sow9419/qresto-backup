@@ -1,0 +1,63 @@
+name: Backup
+
+# Sauvegarde quotidienne de la base de production QResto (Qresto-projet-01,
+# plan Supabase Free, sans sauvegarde native). Cette Action est l'HORLOGE ;
+# Cloudflare R2 en est la DESTINATION — voir scripts/backup-db.sh.
+#
+# Dépôt public dédié (11/10/2026) : minutes gratuites et illimitées, runners
+# GitHub uniquement — la sauvegarde ne dépend d'aucune machine personnelle.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC quotidien
+  workflow_dispatch: {} # déclenchement manuel (répétition avant le test de restauration)
+
+permissions:
+  contents: read
+  # Maintien en vie : GitHub suspend les tâches planifiées d'un dépôt public
+  # resté 60 jours sans activité. Réactiver le workflow chaque jour remet ce
+  # compteur à zéro (aucun commit nécessaire).
+  actions: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer postgresql-client 17 (PGDG)
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          # Le runner ubuntu-latest a déjà un pg_dump v16 préinstallé sur le
+          # PATH ; update-alternatives ne bascule pas automatiquement les
+          # binaires (seule la page de man psql l'est). On force le PATH
+          # vers les binaires v17 pour tout le reste du job (échec réel
+          # constaté le 07/09/2026 : "server version mismatch — server
+          # 17.6, pg_dump 16.15").
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Vérifier AWS CLI (préinstallé sur l'image ubuntu-latest)
+        run: aws --version
+
+      - name: Vérifier pg_dump (doit être la v17, pas la v16 préinstallée)
+        run: pg_dump --version
+
+      - name: Sauvegarde chiffrée → Cloudflare R2
+        run: bash scripts/backup-db.sh
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Maintien en vie de la tâche planifiée
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/backup.yml/enable"
