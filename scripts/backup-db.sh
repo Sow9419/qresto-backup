@@ -84,7 +84,7 @@ export AWS_DEFAULT_REGION="auto"
 OBJECT_KEY="backups/${ENCRYPTED_FILE}"
 echo "→ upload vers R2 (${OBJECT_KEY})"
 aws s3 cp "$ENCRYPTED_FILE" "s3://${R2_BUCKET}/${OBJECT_KEY}" \
-  --endpoint-url "$R2_ENDPOINT"
+  --endpoint-url "$R2_ENDPOINT" --only-show-errors
 
 echo "→ vérification : l'objet existe bien sur R2"
 aws s3api head-object \
